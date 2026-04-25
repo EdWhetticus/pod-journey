@@ -22,9 +22,7 @@ maxdep=220
 drown_t=300
 cam_spd=0.24
 
--- game modes
-gmode=0   -- 0=select, 1=flip, 2=journey
-sel_mode=1
+gmode=0   -- 0=menu, 2=playing
 px2=false  -- x2 sprite scale toggle
 
 ----------------------------------------
@@ -35,12 +33,11 @@ function _init()
  hscr=dget(0)
  hscr_e=dget(1)
  gmode=0
- sel_mode=1
  menu_t=0
 end
 
-function start_game(m)
- gmode=m
+function start_game()
+ gmode=2
  p={
   x=256,y=315,
   vx=0,vy=0,
@@ -59,7 +56,6 @@ function start_game(m)
  scr_e=0
  mspd=mspd_i
  entry_boost=0
- gauge_tier=0
  p_outline_c=14
  death_freeze_t=0
  death_sx=0
@@ -271,21 +267,16 @@ function kill_pod_member(d)
 end
 
 function max_pod_count()
- return 4+gauge_tier
+ return 4
 end
 
--- effective speed: journey = base + per-jump entry boost, flip = hyperbolic+boost
+-- effective speed: base + per-jump entry boost
 function eff_spd()
- if gmode==2 then return min(jmspd_max,mspd+entry_boost) end
- local range=mspd_max-mspd_i
- local raw=gauge_tier*range+(mspd-mspd_i)
- local k=range*2
- return mspd_i+raw*k/(raw+k)+entry_boost
+ return min(jmspd_max,mspd+entry_boost)
 end
 
--- kill multiple pod members based on gauge tier
 function kill_pod_multi()
- local to_kill=1+flr(gauge_tier/2)
+ local to_kill=1
  local killed=0
  for i=#pod,1,-1 do
   if killed>=to_kill then break end
@@ -346,8 +337,7 @@ end
 function _update60()
  if gmode==0 then
   menu_t+=1
-  if btnp(0) or btnp(1) or btnp(2) or btnp(3) then sel_mode=3-sel_mode end
-  if btnp(4) or btnp(5) then start_game(sel_mode==1 and 2 or 1) end
+  if btnp(4) or btnp(5) then start_game() end
   return
  end
 
@@ -379,7 +369,6 @@ function _update60()
   else
    if btnp(4) or btnp(5) then
     gmode=0
-    sel_mode=1
    end
   end
   return
@@ -434,22 +423,15 @@ function _update60()
    p.flipped=true
    add_popup("+"..gain.." flip",p.x,p.y-14,10,-0.08)
   end
-  -- journey: accumulate horizontal distance (either direction)
-  if gmode==2 then
-   air_dist+=abs(p.vx)*0.04
-  end
+  -- accumulate horizontal distance (either direction)
+  air_dist+=abs(p.vx)*0.04
  else
   rot_acc=0
-  if gmode==2 then air_dist=0 end
+  air_dist=0
  end
- -- passive gauge decay: logarithmic ヌ█⬆️ faster at higher gauge
- if gmode==1 then
-  local gp=(mspd-mspd_i)/(mspd_max-mspd_i)
-  mspd=max(mspd_i,mspd-gp*gp*0.001)
- elseif gmode==2 then
-  local gp=(mspd-mspd_i)/(4.0-mspd_i)
-  mspd=max(mspd_i,mspd-gp*gp*0.0013)
- end
+ -- passive speed decay
+ local gp=(mspd-mspd_i)/(4.0-mspd_i)
+ mspd=max(mspd_i,mspd-gp*gp*0.0013)
 
  prev_a=p.a
 
@@ -551,6 +533,21 @@ function upd_p()
  p.x=(p.x+p.vx)%ww
  p.y+=p.vy
 
+ -- air trail: emit behind player
+ if p.y<=wtr and rnd(1)<0.5 then
+  local tdx=-cos(p.a)
+  local tdy=-sin(p.a)
+  local spread=(rnd(1)-0.5)*1.2
+  local tspd=1.5+rnd(1.2)
+  add(prt,{
+   x=p.x+tdx*7+(rnd(1)-0.5)*2,
+   y=p.y+tdy*7+(rnd(1)-0.5)*2,
+   vx=p.vx+tdx*tspd+tdy*spread,
+   vy=p.vy+tdy*tspd-tdx*spread,
+   l=5+rnd(6),c=7,tail=true
+  })
+ end
+
  -- water: submersion + buoyancy
  local was_under=p.uwt>0
  local es=eff_spd()
@@ -608,10 +605,11 @@ function upd_p()
     local dive=min(vel_down,nose_down)
     local dive_adj=min(1,dive*1.5)
     alignment=max(axis_align,dive_adj)
+    local horiz_f=abs(p.vx)/spd
     flop=1-alignment
-    -- nose-down penalty: diving straight down is not a skilled entry
+    -- nose-down penalty reduced when moving horizontally
     local nose_pen=max(0,sin(p.a))
-    flop=min(1,flop+nose_pen*nose_pen*0.18)
+    flop=min(1,flop+nose_pen*nose_pen*0.18*(1-horiz_f))
     quality=max(0,1-delta/0.12)
     if is_rev then quality=0 end
    end
@@ -625,19 +623,13 @@ function upd_p()
     local tier=0
     local horiz_f=spd>0.1 and abs(p.vx)/spd or 0
     local flop_thresh=0.45+horiz_f*0.1
+    -- near-vertical: horiz component < 30% of speed (no perfect on dives)
+    local near_vert=horiz_f<0.3
     if flop>=flop_thresh and p.fall_spd>0.3 then
      tier=-1
-    elseif flop<0.065 then tier=3
+    elseif flop<0.065 and not near_vert then tier=3
     elseif flop<0.18 then tier=2
     elseif flop<0.35 then tier=1
-    end
-
-    -- entry multiplier for scoring
-    local emult=1
-    if tier==-1 then emult=0
-    elseif tier==1 then emult=2
-    elseif tier==2 then emult=3
-    elseif tier==3 then emult=5
     end
 
     -- belly flop effects
@@ -668,10 +660,6 @@ function upd_p()
        end
       end
       catch_up_t=20 inv_t=60 loss_prot=300
-      if gmode==1 then
-       local gloss=flr(gauge_tier/2)
-       gauge_tier=max(0,gauge_tier-gloss)
-      end
      else
       banner_t=90 banner_txt="belly flop!" banner_c=8
       die()
@@ -679,36 +667,24 @@ function upd_p()
      end
     end
 
-    -- scoring
+    -- scoring: dist * (flips+1) * dolphins; 0 flips=x1, 1 flip=x2, etc.
     local pm=pod_mult()
     local earned=0
-    if gmode==2 then
-     -- journey: dist * (flips+1) * dolphins; 0 flips=x1, 1 flip=x2, etc.
-     local dist=flr(air_dist)
-     local fc=temp_scr+1
-     if tier~=-1 then
-      earned=dist*fc*pm
-      if pending_scr>0 then add_score(pending_scr) end
-      pending_scr=earned pending_t=90
-     end
-     disp_temp=dist
-     disp_pm=temp_scr  -- raw flip count (0=no flips)
-     disp_emult=pm
-     disp_earned=earned
-    else
-     -- flip mode
-     earned=temp_scr*emult*pm
+    local dist=flr(air_dist)
+    local fc=temp_scr+1
+    if tier~=-1 then
+     earned=dist*fc*pm
      if pending_scr>0 then add_score(pending_scr) end
      pending_scr=earned pending_t=90
-     disp_temp=temp_scr
-     disp_emult=emult
-     disp_pm=pm
-     disp_earned=earned
     end
+    disp_temp=dist
+    disp_pm=temp_scr  -- raw flip count (0=no flips)
+    disp_emult=pm
+    disp_earned=earned
     disp_tier=tier
     entry_wx=p.x
     entry_wy=p.y
-    if (gmode==1 and temp_scr>0) or (gmode==2 and air_dist>0) then
+    if air_dist>0 then
      temp_disp_t=90
     end
     -- set underwater outline color from entry quality
@@ -719,67 +695,34 @@ function upd_p()
     else p_outline_c=14
     end
 
-    if gmode==1 then
-     -- flip: gauge gain + entry boost
-     entry_boost=0
-     if tier==1 then entry_boost=0.5
-     elseif tier==2 then entry_boost=0.8
-     elseif tier==3 then entry_boost=2.0
-     end
-     if tier>=0 and p.flipped and quality>0 then
-      local gain=(0.16+prog*0.84)*quality*0.3
-      if tier==3 then gain*=3 end
-      mspd=min(mspd_max,mspd+gain)
-      if mspd>=mspd_max-0.01 then
-       gauge_tier+=1
-       mspd=mspd_i
-       gain_pod_member()
-      end
-     end
-     -- quality pts for pod gain
-     if not p.flipped then
-      quality_pts=0
-     elseif tier==3 then
-      quality_pts+=2
-     elseif tier==2 then
-      quality_pts+=1
-     else
-      quality_pts=0
-     end
-     if quality_pts>=3 then
-      quality_pts=0
-      gain_pod_member()
-     end
+    -- entry_boost is set per-jump (not additive), mspd base grows slowly
+    entry_boost=0
+    local gauge_f=(mspd-mspd_i)/(4.0-mspd_i)  -- 0 at start, 1 at max base
+    if tier==1 then
+     entry_boost=0.5
+     mspd=min(4.0,mspd+0.05)
+    elseif tier==2 then
+     entry_boost=0.4+gauge_f*0.6  -- 0.4 at low gauge, 1.0 at max
+     mspd=min(4.0,mspd+0.1)
+    elseif tier==3 then
+     entry_boost=0.6+gauge_f*1.4  -- 0.6 at low gauge, 2.0 at max
+     mspd=min(4.0,mspd+0.2)
     else
-     -- journey: entry_boost is set per-jump (not additive), mspd base grows slowly
-     entry_boost=0
-     local gauge_f=(mspd-mspd_i)/(4.0-mspd_i)  -- 0 at start, 1 at max base
-     if tier==1 then
-      entry_boost=0.5
-      mspd=min(4.0,mspd+0.05)
-     elseif tier==2 then
-      entry_boost=0.4+gauge_f*0.6  -- 0.4 at low gauge, 1.0 at max
-      mspd=min(4.0,mspd+0.1)
-     elseif tier==3 then
-      entry_boost=2.0
-      mspd=min(4.0,mspd+0.2)
-     else
-      mspd=max(mspd_i,mspd-0.03)
-     end
-     -- quality pts still earn pod members
-     if not p.flipped then
-      quality_pts=0
-     elseif tier==3 then
-      quality_pts+=2
-     elseif tier==2 then
-      quality_pts+=1
-     else
-      quality_pts=0
-     end
-     if quality_pts>=3 then
-      quality_pts=0
-      gain_pod_member()
-     end
+     mspd=max(mspd_i,mspd-0.03)
+    end
+    -- quality pts earn pod members
+    if not p.flipped then
+     quality_pts=0
+    elseif tier==3 then
+     quality_pts+=2
+    elseif tier==2 then
+     quality_pts+=1
+    else
+     quality_pts=0
+    end
+    if quality_pts>=3 then
+     quality_pts=0
+     gain_pod_member()
     end
 
     -- tier display: banner + colored splash
@@ -960,6 +903,10 @@ function upd_shrk()
 
     if new_p then
      del(pod,new_p)
+     -- refill trail so followers target current position
+     for k=1,trail_len do
+      trail[k]={x=p.x,y=p.y,a=p.a}
+     end
      catch_up_t=20
      inv_t=60
      loss_prot=300
@@ -1131,7 +1078,7 @@ function upd_prt()
   local pt=prt[i]
   pt.x+=pt.vx
   pt.y+=pt.vy
-  pt.vy+=0.015
+  if not pt.tail then pt.vy+=0.015 end
   pt.l-=1
   if pt.l<=0 then deli(prt,i) end
  end
@@ -1206,17 +1153,16 @@ function _draw()
   print("pod",58,38,7)
   -- hi-score top-right
   print("hi "..hscr,90,4,6)
-  -- mode options
-  print("journey",18,72,sel_mode==1 and 7 or 5)
-  print("flip",76,72,sel_mode==2 and 7 or 5)
-  line(sel_mode==1 and 18 or 76,79,sel_mode==1 and 60 or 92,79,10)
+  -- title subtitle
+  print("journey",46,72,7)
+  line(46,79,76,79,10)
   -- wave
   rectfill(0,97,127,127,1)
   for wx=0,127,2 do
    pset(wx,97+flr(sin(t()*.3+wx*.04)*2),7)
   end
   -- description (below water)
-  local d=sel_mode==1 and "fly far, flip to multiply" or "flip to score and grow pod"
+  local d="fly far, flip to multiply"
   print(d,64-#d*2,106,7)
   print("x/o start",41,118,12)
   return
@@ -1406,29 +1352,21 @@ function _draw()
  end
 
  -- temp score display (airborne)
- if p.alive and p.y<=wtr then
+ if p.alive and p.y<=wtr and air_dist>0 then
   local pdx=(p.x-cam_x+ww/2)%ww-ww/2
   local sx=64+pdx+shx+6
   local sy=64+(p.y-cam_y)+shy-10
-  if gmode==2 and air_dist>0 then
-   local dist=flr(air_dist)
-   local dstr=tostr(dist)
-   local fm=temp_scr+1
-   local full=temp_scr>0 and (dstr.."x"..fm) or dstr
-   for ddx=-1,1 do for ddy=-1,1 do
-    if ddx~=0 or ddy~=0 then print(full,sx+ddx,sy+ddy,0) end
-   end end
-   print(dstr,sx,sy,7)
-   if temp_scr>0 then
-    print("x",sx+#dstr*4,sy,7)
-    print(fm,sx+#dstr*4+4,sy,10)
-   end
-  elseif gmode==1 and temp_scr>0 then
-   local ts=tostr(temp_scr)
-   for ddx=-1,1 do for ddy=-1,1 do
-    if ddx~=0 or ddy~=0 then print(ts,sx+ddx,sy+ddy,0) end
-   end end
-   print(ts,sx,sy,10)
+  local dist=flr(air_dist)
+  local dstr=tostr(dist)
+  local fm=temp_scr+1
+  local full=temp_scr>0 and (dstr.."x"..fm) or dstr
+  for ddx=-1,1 do for ddy=-1,1 do
+   if ddx~=0 or ddy~=0 then print(full,sx+ddx,sy+ddy,0) end
+  end end
+  print(dstr,sx,sy,7)
+  if temp_scr>0 then
+   print("x",sx+#dstr*4,sy,7)
+   print(fm,sx+#dstr*4+4,sy,10)
   end
  end
 
@@ -1462,28 +1400,14 @@ function _draw()
    -- belly flop: handled by banner, skip
   elseif temp_disp_t<8 and temp_disp_t%3<1 then
   elseif temp_disp_t>45 then
-   -- formula parts: flip count yellow, dolphin count pink, rest white
-   local dn=gmode==1 and disp_pm or disp_emult
-   local dns=tostr(dn)
-   -- tier color for emult (flip mode only)
-   local tier_c
-   if disp_tier==3 then tier_c=10
-   elseif disp_tier==2 then tier_c=9
-   elseif disp_tier==1 then tier_c=11
-   else tier_c=7
-   end
-   -- flip mode:  [flips]x[emult]x[dolphins]
-   -- journey:    [dist]x[flips]x[dolphins]  (flip omitted if no flips)
-   local p1,fs,p2
-   if gmode==1 then
-    p1="" fs=tostr(disp_temp) p2="x"..disp_emult.."x"
+   -- formula: [dist]x[flips]x[dolphins]  (flip omitted if no flips)
+   local dns=tostr(disp_emult)
+   local p1=tostr(disp_temp).."x"
+   local fs,p2
+   if disp_pm>0 then
+    fs=tostr(disp_pm+1) p2="x"
    else
-    p1=tostr(disp_temp).."x"
-    if disp_pm>0 then
-     fs=tostr(disp_pm+1) p2="x"
-    else
-     fs="" p2=""
-    end
+    fs="" p2=""
    end
    local full=p1..fs..p2..dns
    local tw=#full*4
@@ -1494,24 +1418,14 @@ function _draw()
      print(full,tx+ddx,fy+ddy,0)
     end
    end end
-   -- main pass
+   -- main pass: [white dist] x [yellow flips] x [pink dolphins]
    local cx=tx
-   if gmode==1 then
-    -- flip: [yellow flips] x [tier_c emult] x [pink dolphins]
-    local es=tostr(disp_emult)
-    print(fs,cx,fy,10) cx+=#fs*4
-    print("x",cx,fy,7) cx+=4
-    print(es,cx,fy,tier_c) cx+=#es*4
-    print("x",cx,fy,7) cx+=4
-   else
-    -- journey: [white dist] x [yellow flips] x [pink dolphins]
-    if #p1>0 then print(p1,cx,fy,7) end
-    cx+=#p1*4
-    if #fs>0 then print(fs,cx,fy,10) end
-    cx+=#fs*4
-    if #p2>0 then print(p2,cx,fy,7) end
-    cx+=#p2*4
-   end
+   if #p1>0 then print(p1,cx,fy,7) end
+   cx+=#p1*4
+   if #fs>0 then print(fs,cx,fy,10) end
+   cx+=#fs*4
+   if #p2>0 then print(p2,cx,fy,7) end
+   cx+=#p2*4
    print(dns,cx,fy,14)
   else
    local txt="+"..disp_earned
@@ -1581,26 +1495,13 @@ function _draw()
   rect(bx,121,bx+40,125,5)
  end
 
- -- speed gauge (bottom left, flip mode only)
- if gmode==1 then
-  print("spd",1,115,6)
-  local gauge_pct=(mspd-mspd_i)/(mspd_max-mspd_i)
-  local bw=-flr(-gauge_pct*40)
-  rectfill(1,121,41,125,0)
-  if bw>0 then rectfill(1,121,1+min(bw,40),125,11) end
-  rect(1,121,41,125,5)
-  if gauge_tier>0 then
-   print("+"..gauge_tier,43,121,10)
-  end
- else
-  -- journey: show base speed gauge only (not entry boost)
-  local spd_pct=(mspd-mspd_i)/(4.0-mspd_i)
-  local bw=-flr(-spd_pct*40)
-  print("spd",1,115,6)
-  rectfill(1,121,41,125,0)
-  if bw>0 then rectfill(1,121,1+min(bw,40),125,9) end
-  rect(1,121,41,125,5)
- end
+ -- speed gauge (bottom left): base speed only (not entry boost)
+ local spd_pct=(mspd-mspd_i)/(4.0-mspd_i)
+ local bw=-flr(-spd_pct*40)
+ print("spd",1,115,6)
+ rectfill(1,121,41,125,0)
+ if bw>0 then rectfill(1,121,1+min(bw,40),125,9) end
+ rect(1,121,41,125,5)
 
  -- banner (top center)
  if banner_t>0 then
