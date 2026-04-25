@@ -434,9 +434,9 @@ function _update60()
    p.flipped=true
    add_popup("+"..gain.." flip",p.x,p.y-14,10,-0.08)
   end
-  -- journey: accumulate forward horizontal distance (scaled down)
+  -- journey: accumulate horizontal distance (either direction)
   if gmode==2 then
-   air_dist+=max(0,p.vx)*0.04
+   air_dist+=abs(p.vx)*0.04
   end
  else
   rot_acc=0
@@ -1042,8 +1042,10 @@ function upd_pod()
     target_y+=d.perp_off
    end
 
-   local wave=sin(t()*d.wave_freq+d.wave_phase)*d.wave_amp
-   target_y+=wave
+   if d.y>wtr then
+    local wave=sin(t()*d.wave_freq+d.wave_phase)*d.wave_amp
+    target_y+=wave
+   end
 
    local base_fs=d.perp_off~=0 and 0.14 or 0.18-d.chain_pos*0.01
    local follow_speed=base_fs+spd_bonus*0.06
