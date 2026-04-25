@@ -104,6 +104,7 @@ function start_game()
  dying_dphs={}
  loss_prot=0
  air_dist=0   -- journey: horiz distance accumulated in air
+ decay_t=0    -- frames before speed decay resumes
 
  -- position history trail (circular buffer)
  trail={}
@@ -429,9 +430,13 @@ function _update60()
   rot_acc=0
   air_dist=0
  end
- -- passive speed decay
- local gp=(mspd-mspd_i)/(4.0-mspd_i)
- mspd=max(mspd_i,mspd-gp*gp*0.0013)
+ -- passive speed decay (1s grace after last entry boost)
+ if decay_t>0 then
+  decay_t-=1
+ else
+  local gp=(mspd-mspd_i)/(4.0-mspd_i)
+  mspd=max(mspd_i,mspd-gp*gp*0.0013)
+ end
 
  prev_a=p.a
 
@@ -533,17 +538,21 @@ function upd_p()
  p.x=(p.x+p.vx)%ww
  p.y+=p.vy
 
- -- air trail: emit behind player
+ -- air trail: white particles emitted behind player
  if p.y<=wtr and rnd(1)<0.5 then
   local tdx=-cos(p.a)
   local tdy=-sin(p.a)
+  local perpx=tdy
+  local perpy=-tdx
   local spread=(rnd(1)-0.5)*1.2
   local tspd=1.5+rnd(1.2)
+  local ox=(rnd(1)-0.5)*2
+  local oy=(rnd(1)-0.5)*2
   add(prt,{
-   x=p.x+tdx*7+(rnd(1)-0.5)*2,
-   y=p.y+tdy*7+(rnd(1)-0.5)*2,
-   vx=p.vx+tdx*tspd+tdy*spread,
-   vy=p.vy+tdy*tspd-tdx*spread,
+   x=p.x+tdx*7+ox,
+   y=p.y+tdy*7+oy,
+   vx=p.vx+tdx*tspd+perpx*spread,
+   vy=p.vy+tdy*tspd+perpy*spread,
    l=5+rnd(6),c=7,tail=true
   })
  end
@@ -701,12 +710,15 @@ function upd_p()
     if tier==1 then
      entry_boost=0.5
      mspd=min(4.0,mspd+0.05)
+     decay_t=60
     elseif tier==2 then
      entry_boost=0.4+gauge_f*0.6  -- 0.4 at low gauge, 1.0 at max
      mspd=min(4.0,mspd+0.1)
+     decay_t=60
     elseif tier==3 then
      entry_boost=0.6+gauge_f*1.4  -- 0.6 at low gauge, 2.0 at max
      mspd=min(4.0,mspd+0.2)
+     decay_t=60
     else
      mspd=max(mspd_i,mspd-0.03)
     end
@@ -1162,8 +1174,10 @@ function _draw()
    pset(wx,97+flr(sin(t()*.3+wx*.04)*2),7)
   end
   -- description (below water)
-  local d="fly far, flip to multiply"
-  print(d,64-#d*2,106,7)
+  local d1="fly far. flip. dive clean."
+  local d2="score = dist x flips x pod"
+  print(d1,64-#d1*2,104,7)
+  print(d2,64-#d2*2,111,6)
   print("x/o start",41,118,12)
   return
  end
