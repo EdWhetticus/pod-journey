@@ -22,7 +22,19 @@ maxdep=220
 drown_t=300
 cam_spd=0.24
 
-gmode=0   -- 0=menu, 2=playing
+gmode=0   -- 0=menu, 1=tutorial, 2=playing
+tut_page=1
+rb={7,8,9,10,11,12,14,15}
+rb2={7,10,11,12,8,14,15,9}
+tut_pg={
+[1]={{"controls",40,24,10},{"use \139 and \145 to flip",14,52,7}},
+[2]={{"entry quality",30,24,10},{"the more in line your\nentry angle is with\nyour motion, the better\nthe entry quality.",10,44,7}},
+[4]={{"belly flop!",36,24,8},{"entering the water at\na bad angle = belly flop.",6,42,7},{"you lose a",6,68,7},{"pod member.",50,68,14},{"lose them all = game over",6,78,8}},
+[5]={{"speed gauge",36,24,10},{"the gauge decays\nover time.",18,46,7},{"keep it full!",30,76,12}},
+[6]={{"flips",52,24,10},{"front flip = +1\nback flip  = +2",24,46,6},{"flips multiply score",10,76,12}},
+[7]={{"your pod",40,24,10},{"each",12,40,7},{"pod member",32,40,14},{"adds",74,40,7},{"a score multiplier.",14,50,7},{"consecutive great or\nperfect entries grant",10,68,7},{"pod members",18,88,14},{"back.",66,88,7}},
+[8]={{"animals",42,24,10},{"hitting birds shifts\nyour angle but gives\n+1 multiplier.",10,42,7},{"hitting sharks =",18,72,8},{"lose a",10,82,7},{"pod member",38,82,14},{".",78,82,7},{"press \142 to start",22,104,12}},
+}
 px2=false  -- x2 sprite scale toggle
 
 ----------------------------------------
@@ -30,10 +42,15 @@ px2=false  -- x2 sprite scale toggle
 ----------------------------------------
 function _init()
  cartdata("surf_hiscore")
- hscr=dget(0)
- hscr_e=dget(1)
+ hscr={0}
+ local n=flr(dget(0))
+ if n>0 and n<20 then
+  hscr={}
+  for i=1,n do hscr[i]=flr(dget(i)) end
+ end
  gmode=0
  menu_t=0
+ tut_page=1
 end
 
 function start_game()
@@ -52,8 +69,7 @@ function start_game()
  pop={}
  brd={}
  shrk={}
- scr=0
- scr_e=0
+ scr={0}
  mspd=mspd_i
  entry_boost=0
  p_outline_c=14
@@ -84,13 +100,13 @@ function start_game()
  temp_scr=0
  temp_flash=0
  temp_disp_t=0
- pending_scr=0
- pending_scr_e=0
+ pending_d=0
+ pending_m=0
  pending_t=0
  disp_temp=0
  disp_emult=0
  disp_pm=0
- disp_earned=0
+ disp_earned={0}
  disp_tier=0
  entry_wx=0
  entry_wy=0
@@ -205,29 +221,48 @@ end
 ----------------------------------------
 -- score helpers
 ----------------------------------------
-function add_score(e)
- if e<=0 then return end
- -- scale e down to match current exponent
- for i=1,scr_e do e=max(1,flr(e/10)) end
- -- promote if adding e would overflow
- while scr+e>=30000 do
-  scr=flr(scr/10)
-  e=max(1,flr(e/10))
-  scr_e+=1
+-- score = table of base-10000 chunks, lowest-significance first
+function add_n(t,n)
+ n=flr(n)
+ if n<=0 then return end
+ local i,c=1,n
+ while c>0 do
+  t[i]=(t[i] or 0)+c%10000
+  c=flr(c/10000)
+  if t[i]>=10000 then t[i]-=10000 c+=1 end
+  i+=1
  end
- scr+=e
 end
 
-function score_str(s,se)
- if se>0 then
-  return tostr(flr(s)).."e+"..tostr(se)
- end
- return tostr(flr(s))
+function add_score(n) add_n(scr,n) end
+
+-- compute d*m as a chunk table (avoids overflow of single-jump score)
+function chunks_mult(d,m)
+ local t={0}
+ for i=1,m do add_n(t,d) end
+ return t
 end
 
-function scr_gt(a,ae,b,be)
- if ae~=be then return ae>be end
- return a>b
+-- format chunk table with comma separators
+function score_str(s)
+ local n=#s
+ local d=tostr(s[n])
+ for i=n-1,1,-1 do d=d..sub("0000"..s[i],-4) end
+ local r,len="",#d
+ for i=1,len do
+  r=r..sub(d,i,i)
+  local left=len-i
+  if left>0 and left%3==0 then r=r.."," end
+ end
+ return r
+end
+
+function scr_gt(a,b)
+ if #a~=#b then return #a>#b end
+ for i=#a,1,-1 do
+  if a[i]~=b[i] then return a[i]>b[i] end
+ end
+ return false
 end
 
 ----------------------------------------
@@ -267,10 +302,6 @@ function kill_pod_member(d)
  d.death_vy=sin(d.a)*p_spd*0.5
 end
 
-function max_pod_count()
- return 4
-end
-
 -- effective speed: base + per-jump entry boost
 function eff_spd()
  return min(jmspd_max,mspd+entry_boost)
@@ -294,7 +325,7 @@ function kill_pod_multi()
 end
 
 function gain_pod_member()
- if pod_alive_count()>=max_pod_count() then return end
+ if pod_alive_count()>=4 then return end
  local alive=pod_alive_count()
  local cp,po
  if alive<4 then
@@ -338,7 +369,28 @@ end
 function _update60()
  if gmode==0 then
   menu_t+=1
-  if btnp(4) or btnp(5) then start_game() end
+  if btnp(5) then start_game()
+  elseif btnp(4) then
+   gmode=1
+   tut_page=1
+  end
+  return
+ end
+ if gmode==1 then
+  menu_t+=1
+  if btnp(1) then
+   tut_page+=1
+   if tut_page>8 then tut_page=9 end
+  elseif btnp(0) then
+   tut_page-=1
+   if tut_page<1 then tut_page=1 end
+  elseif btnp(5) then
+   if tut_page>=8 then start_game()
+   else tut_page+=1 end
+  elseif btnp(4) then
+   gmode=0
+   tut_page=1
+  end
   return
  end
 
@@ -381,8 +433,9 @@ function _update60()
  if loss_prot>0 then loss_prot-=1 end
  if pending_t>0 then
   pending_t-=1
-  if pending_t==0 and pending_scr>0 then
-   add_score(pending_scr) pending_scr=0
+  if pending_t==0 and pending_m>0 then
+   for k=1,pending_m do add_score(pending_d) end
+   pending_m=0
   end
  end
 
@@ -422,7 +475,7 @@ function _update60()
    temp_flash=5
    shk=2
    p.flipped=true
-   add_popup("+"..gain.." flip",p.x,p.y-14,10,-0.08)
+   add_popup("+"..gain.." flip",p.x,p.y-14,10,-0.08,p.vx)
   end
   -- accumulate horizontal distance (either direction)
   air_dist+=abs(p.vx)*0.04
@@ -521,13 +574,12 @@ function upd_p()
  p.vy+=grav
 
  local es=eff_spd()
- local prog_d=(es-mspd_i)/(mspd_max-mspd_i)
- local drag_ease=prog_d*0.003
+ local prog=(es-mspd_i)/(mspd_max-mspd_i)
+ local drag_ease=prog*0.003
  p.vx*=(drag_x+drag_ease)
  p.vy*=(drag_y+drag_ease)
 
  -- speed cap
- local prog=(es-mspd_i)/(mspd_max-mspd_i)
  local cap=p.y>wtr and es*(1+prog*0.5) or es*(1.5+prog*3.0)
  local s=sqrt(p.vx^2+p.vy^2)
  if s>cap then
@@ -678,18 +730,19 @@ function upd_p()
 
     -- scoring: dist * (flips+1) * dolphins; 0 flips=x1, 1 flip=x2, etc.
     local pm=pod_mult()
-    local earned=0
     local dist=flr(air_dist)
     local fc=temp_scr+1
     if tier~=-1 then
-     earned=dist*fc*pm
-     if pending_scr>0 then add_score(pending_scr) end
-     pending_scr=earned pending_t=90
+     -- commit previous pending if any
+     if pending_m>0 then
+      for k=1,pending_m do add_score(pending_d) end
+     end
+     pending_d=dist pending_m=fc*pm pending_t=90
     end
     disp_temp=dist
     disp_pm=temp_scr  -- raw flip count (0=no flips)
     disp_emult=pm
-    disp_earned=earned
+    disp_earned=tier~=-1 and chunks_mult(dist,fc*pm) or {0}
     disp_tier=tier
     entry_wx=p.x
     entry_wy=p.y
@@ -764,7 +817,6 @@ function upd_p()
       if pvy>0 then pvy=-pvy end
       local pc
       if tier==3 then
-       local rb={7,8,9,10,11,12,14,15}
        pc=rb[flr(rnd(#rb))+1]
       else
        pc=rnd(1)<0.5 and tc or (rnd(1)<0.7 and tc2 or tc3)
@@ -824,17 +876,20 @@ function upd_p()
 end
 
 function die()
- if pending_scr>0 then add_score(pending_scr) pending_scr=0 end
+ if pending_m>0 then
+  for k=1,pending_m do add_score(pending_d) end
+  pending_m=0
+ end
  p.alive=false
  death_freeze_t=120
  death_sx=p.x
  death_sy=p.y
  death_sa=p.a
- if scr_gt(scr,scr_e,hscr,hscr_e) then
-  hscr=scr
-  hscr_e=scr_e
-  dset(0,hscr)
-  dset(1,hscr_e)
+ if scr_gt(scr,hscr) then
+  hscr={}
+  for i=1,#scr do hscr[i]=scr[i] end
+  dset(0,#hscr)
+  for i=1,#hscr do dset(i,hscr[i]) end
  end
  shk=8
  for i=1,15 do
@@ -933,7 +988,7 @@ function upd_shrk()
    end
   end
  end
- local mx=min(2,1+(scr_e>0 and 1 or flr(scr/8000)))
+ local mx=min(2,1+(#scr>1 and 1 or flr(scr[1]/8000)))
  while #shrk<mx do add_shrk() end
 end
 
@@ -989,8 +1044,8 @@ function upd_pod()
    local target_x=trail[ti].x
    local target_y=trail[ti].y
    local target_a=trail[ti].a
-   -- clamp max lag so pod never goes off screen
-   local max_lag=14+d.chain_pos*12
+   -- clamp max lag so pod stays close enough at high speeds
+   local max_lag=10+d.chain_pos*10
    local lag_dx=(p.x-target_x+ww/2)%ww-ww/2
    if lag_dx>max_lag then
     target_x=(p.x-max_lag+ww)%ww
@@ -1068,15 +1123,17 @@ end
 ----------------------------------------
 -- popups
 ----------------------------------------
-function add_popup(txt,wx,wy,col,spd)
- add(pop,{x=wx,y=wy,vy=spd or -0.2,
+function add_popup(txt,wx,wy,col,spd,vx)
+ add(pop,{x=wx,y=wy,vx=vx or 0,vy=spd or -0.2,
   txt=txt,l=90,c=col or 10})
 end
 
 function upd_pop()
  for i=#pop,1,-1 do
   local pp=pop[i]
+  pp.x=(pp.x+pp.vx)%ww
   pp.y+=pp.vy
+  pp.vx*=0.94
   pp.l-=1
   if pp.l<=0 then deli(pop,i) end
  end
@@ -1164,21 +1221,40 @@ function _draw()
   end end
   print("pod",58,38,7)
   -- hi-score top-right
-  print("hi "..hscr,90,4,6)
+  local hs="hi "..score_str(hscr)
+  print(hs,127-#hs*4,4,6)
   -- title subtitle
-  print("journey",46,72,7)
-  line(46,79,76,79,10)
+  print("journey",50,72,7)
+  line(50,79,77,79,10)
   -- wave
   rectfill(0,97,127,127,1)
   for wx=0,127,2 do
    pset(wx,97+flr(sin(t()*.3+wx*.04)*2),7)
   end
   -- description (below water)
-  local d1="fly far. flip. dive clean."
-  local d2="score = dist x flips x pod"
-  print(d1,64-#d1*2,104,7)
-  print(d2,64-#d2*2,111,6)
-  print("x/o start",41,118,12)
+  print("\142 start",46,108,12)
+  print("\151 how to play",36,118,7)
+  return
+ end
+ if gmode==1 then
+  cls(1)
+  rectfill(0,0,127,9,12)
+  print("how to play  "..tut_page.."/8",26,2,7)
+  if tut_page==3 then
+   print("clean entries",30,24,10)
+   print("nice",10,44,11)
+   print("/",27,44,7)
+   print("great",33,44,9)
+   print("/",55,44,7)
+   local pw="perfect"
+   for i=1,#pw do
+    print(sub(pw,i,i),61+(i-1)*4,44,rb2[flr(t()*12+i)%#rb2+1])
+   end
+   print("entries boost speed for\nthe next jump and fill\nthe speed gauge.",8,58,7)
+  else
+   for l in all(tut_pg[tut_page]) do print(l[1],l[2],l[3],l[4]) end
+  end
+  print("\139\145 page  \151 back",18,118,6)
   return
  end
 
@@ -1333,7 +1409,6 @@ function _draw()
    local oc
    if p_outline_c==-1 then
     -- perfect: rainbow everywhere
-    local rb={7,8,9,10,11,12,14,15}
     oc=rb[flr(t()*12)%#rb+1]
    elseif p.y>wtr then
     -- underwater: quality colour
@@ -1392,8 +1467,7 @@ function _draw()
   if disp_tier==1 then tc=11
   elseif disp_tier==2 then tc=9
   elseif disp_tier==3 then
-   local cols={7,10,11,12,8,14,15,9}
-   tc=cols[flr(t()*12)%#cols+1]
+   tc=rb2[flr(t()*12)%#rb2+1]
   else tc=7 end
   -- phase 1 (90-45): follow player, drift up slowly
   -- phase 2 (45-0): accelerate from detach point toward HUD
@@ -1442,7 +1516,7 @@ function _draw()
    cx+=#p2*4
    print(dns,cx,fy,14)
   else
-   local txt="+"..disp_earned
+   local txt="+"..score_str(disp_earned)
    local tx=fx-#txt*2
    for ddx=-1,1 do for ddy=-1,1 do
     if ddx~=0 or ddy~=0 then print(txt,tx+ddx,fy+ddy,0) end
@@ -1460,7 +1534,7 @@ function _draw()
  end
 
  -- hud: score (top left, black outline)
- local ss=score_str(scr,scr_e)
+ local ss=score_str(scr)
  for ddx=-1,1 do for ddy=-1,1 do
   if ddx~=0 or ddy~=0 then print(ss,2+ddx,2+ddy,0) end
  end end
@@ -1526,10 +1600,8 @@ function _draw()
   local bc=banner_c
   -- perfect banner: rainbow per letter
   if bt=="perfect!" then
-   local cols={7,10,11,12,8,14,15,9}
    for i=1,#bt do
-    local ci=flr(t()*12+i)%#cols+1
-    local c=cols[ci]
+    local c=rb2[flr(t()*12+i)%#rb2+1]
     if banner_t<15 and (banner_t+i)%3==0 then c=1 end
     local cx=bx+(i-1)*4
     for dx=-1,1 do for dy=-1,1 do
@@ -1556,8 +1628,8 @@ function _draw()
    rectfill(16,48,111,82,0)
    rect(16,48,111,82,7)
    print("game over",38,52,7)
-   print("score: "..score_str(scr,scr_e),34,60,7)
-   print("best: "..score_str(hscr,hscr_e),34,68,10)
+   print("score: "..score_str(scr),34,60,7)
+   print("best: "..score_str(hscr),34,68,10)
    print("x/o menu",41,76,6)
   end
  end
